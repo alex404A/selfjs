@@ -7,7 +7,7 @@ import { Var } from './scope'
 import evaluate from './eval'
 
 const options = {
-    ecmaVersion: 5,
+    ecmaVersion: 6,
     sourceType: 'script',
     locations: true,
 }
@@ -74,9 +74,9 @@ export function run(code: string, append_api: { [key: string]: any } = {}) {
     scope.$const('module', $module)
     scope.$const('exports', $exports)
 
-    evaluate(acorn.parse(code, options), scope)
+    return evaluate(acorn.parse(code, options), scope)
 
     // exports
-    const module_var = scope.$find('module')
-    return module_var ? module_var.$get().exports : null
+    // const module_var = scope.$find('module')
+    // return module_var ? module_var.$get().exports : null
 }

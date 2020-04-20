@@ -12,7 +12,11 @@ const RETURN_SINGAL: { result: any } = { result: undefined }
 const evaluate_map: EvaluateMap = {
 
     Program: (program: ESTree.Program, scope: Scope) => {
-        for (const node of program.body) evaluate(node, scope)
+        let result
+        for (const node of program.body) {
+            result = evaluate(node, scope)
+        }
+        return result
     },
 
     Identifier: (node: ESTree.Identifier, scope: Scope) => {
@@ -43,7 +47,7 @@ const evaluate_map: EvaluateMap = {
     DebuggerStatement: (node: ESTree.DebuggerStatement, scope: Scope) => { debugger },
 
     ExpressionStatement: (node: ESTree.ExpressionStatement, scope: Scope) => {
-        evaluate(node.expression, scope)
+        return evaluate(node.expression, scope)
     },
 
     ReturnStatement: (node: ESTree.ReturnStatement, scope: Scope) => {
@@ -450,15 +454,107 @@ const evaluate_map: EvaluateMap = {
 
     Property: (node: ESTree.Property, scope: Scope, computed: boolean) => { throw '这里如果被执行了那也是错的...' },
 
+    ClassExpression: (node: ESTree.ClassExpression, scope: Scope) => {
+        let superClass = null
+        if (node.superClass !== null && node.superClass !== undefined) {
+            superClass = evaluate(node.superClass, scope)
+        }
+        return evaluate(node.body, scope, superClass)
+    },
+
+    ClassDeclaration: (node: ESTree.ClassDeclaration, scope: Scope) => {
+        const identifier = node.id.name
+        let superClass = null
+        if (node.superClass !== null && node.superClass !== undefined) {
+            superClass = evaluate(node.superClass, scope)
+        }
+        const func = evaluate(node.body, scope, superClass)
+        scope.$declar('var', identifier, func)
+    },
+
+    ClassBody: (node: ESTree.ClassBody, scope: Scope, superClass: () => any | null) => {
+        function getKey(md: ESTree.MethodDefinition): string {
+            if (md.computed) {
+                const key = evaluate(md.value, scope)
+                return key.toString()
+            } else {
+                const identifier = <ESTree.Identifier> md.key
+                return identifier.name
+            }
+        }
+        function isSuperInvoke(funcExp: ESTree.FunctionExpression): boolean { 
+            if (funcExp.body.body.length === 0) {
+                return false
+            }
+            const stmt = funcExp.body.body[0]
+            if (stmt.type !== 'ExpressionStatement') {
+                return false
+            }
+            const exp = stmt.expression
+            return exp.type === 'CallExpression' && exp.callee.type === 'Super'
+        }
+        const new_scope = new Scope('block', scope)
+        const constructors = node.body.filter((md: ESTree.MethodDefinition) => md.kind === 'constructor')
+        const isConstructorExist = constructors.length > 0
+        let constructor = function () {}
+        constructor.prototype = {}
+        if (isConstructorExist) {
+            const constructorNode = constructors[0].value
+            constructor = evaluate(constructorNode, new_scope)
+            if (superClass !== null && !isSuperInvoke(constructorNode)) {
+                throw 'Must call super constructor in derived class before accessing "this" or returning from derived constructor'
+            }
+        } else if (superClass != null) {
+            constructor = function () {
+                superClass.call(this)
+            }
+        }
+        if (superClass !== null) {
+            constructor.prototype = Object.create(superClass.prototype)
+        }
+        constructor.prototype.constructor = constructor
+        const others = node.body.filter((md: ESTree.MethodDefinition) => md.kind !== 'constructor')
+        const staticFuncs = others.filter((md: ESTree.MethodDefinition) => md.static)
+        const memberFuncs = others.filter((md: ESTree.MethodDefinition) => !md.static)
+        const staticKeys: Array<string> = []
+        for (let func of staticFuncs) {
+            const key = getKey(func)
+            if (staticKeys.indexOf(key) > -1) {
+                throw 'duplicate static key in class definition'
+            }
+            const value = evaluate(func.value, new_scope)
+            staticKeys.push(key)
+            constructor[key] = value
+        }
+        const memberKeys: Array<string> = []
+        for (let func of memberFuncs) {
+            const key = getKey(func)
+            if (memberKeys.indexOf(key) > -1) {
+                throw 'duplicate member key in class definition'
+            }
+            const value = evaluate(func.value, new_scope)
+            memberKeys.push(key)
+            constructor.prototype[key] = value
+        }
+        return constructor
+    },
+
+    Super: (node: ESTree.Super, scope: Scope) => {
+        const $var = scope.$find('this')
+        if ($var === null) {
+            throw 'no this found in scope when evaluating super'
+        }
+        const thisVar = $var.$get()
+        const constructor = thisVar.__proto__.__proto__.constructor
+        return constructor.bind(thisVar)
+    },
+
     // 下面是 es6 / es7 特性, 先不做处理
-    ClassExpression: (node: ESTree.ClassExpression, scope: Scope) => { throw `${node.type} 未实现` },
     RestElement: (node: ESTree.RestElement, scope: Scope) => { throw `${node.type} 未实现` },
     MetaProperty: (node: ESTree.MetaProperty, scope: Scope) => { throw `${node.type} 未实现` },
     AwaitExpression: (node: ESTree.AwaitExpression, scope: Scope) => { throw `${node.type} 未实现` },
-    Super: (node: ESTree.Super, scope: Scope) => { throw `${node.type} 未实现` },
     SpreadElement: (node: ESTree.SpreadElement, scope: Scope) => { throw `${node.type} 未实现` },
     TemplateElement: (node: ESTree.TemplateElement, scope: Scope) => { throw `${node.type} 未实现` },
-    ClassDeclaration: (node: ESTree.ClassDeclaration, scope: Scope) => { throw `${node.type} 未实现` },
     TaggedTemplateExpression: (node: ESTree.TaggedTemplateExpression, scope: Scope) => { throw `${node.type} 未实现` },
     MethodDefinition: (node: ESTree.MethodDefinition, scope: Scope) => { throw `${node.type} 未实现` },
     AssignmentPattern: (node: ESTree.AssignmentPattern, scope: Scope) => { throw `${node.type} 未实现` },
@@ -466,7 +562,6 @@ const evaluate_map: EvaluateMap = {
     ArrayPattern: (node: ESTree.ArrayPattern, scope: Scope) => { throw `${node.type} 未实现` },
     ForOfStatement: (node: ESTree.ForOfStatement, scope: Scope) => { throw `${node.type} 未实现` },
     TemplateLiteral: (node: ESTree.TemplateLiteral, scope: Scope) => { throw `${node.type} 未实现` },
-    ClassBody: (node: ESTree.ClassBody, scope: Scope) => { throw `${node.type} 未实现` },
     ImportDeclaration: (node: ESTree.ImportDeclaration, scope: Scope) => { throw `${node.type} 未实现` },
     ExportNamedDeclaration: (node: ESTree.ExportNamedDeclaration, scope: Scope) => { throw `${node.type} 未实现` },
     ExportDefaultDeclaration: (node: ESTree.ExportDefaultDeclaration, scope: Scope) => { throw `${node.type} 未实现` },

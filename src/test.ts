@@ -1,16 +1,33 @@
-
-
 import * as interpreter from './main'
 
-
-// 解释器执行 hello world
-interpreter.run(`console.log('hello world')`)
 
 // 自举解释器代码
 declare const require, __dirname
 const fs = require('fs')
-const interpreter_code = fs.readFileSync('./lib/interpreter.js', 'utf-8')
-const bootstrap = interpreter.run(interpreter_code)
+const interpreter_code = `
+  class B {
+    constructor() {
+      this.b = 3
+    }
+  }
+  class A extends B {
+    constructor() {
+      super()
+      this.a = 1
+    }
 
-// 自举的解释器实行 hello world
-bootstrap.run(`console.log('hello world!')`)
+    static b() {
+      return 2
+    }
+
+    c() {
+      return 4
+    }
+  }
+  const a = new A(1)
+  console.log(a.a)
+  console.log(a.b)
+  console.log(A.b())
+  console.log(a.c())
+`
+interpreter.run(interpreter_code)
