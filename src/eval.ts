@@ -4,6 +4,7 @@ import * as ESTree from 'estree'
 import { EvaluateMap, NodeTypeMap, EvaluateFunc } from './type'
 import { Scope } from './scope'
 import { Var } from './scope'
+import { isIterable } from './utils'
 
 const BREAK_SINGAL: {} = {}
 const CONTINUE_SINGAL: {} = {}
@@ -130,7 +131,7 @@ const evaluate_map: EvaluateMap = {
             }
         } finally {
             if (node.finalizer)
-                return evaluate(node.finalizer, scope)
+                evaluate(node.finalizer, scope)
         }
     },
 
@@ -203,10 +204,14 @@ const evaluate_map: EvaluateMap = {
     VariableDeclaration: (node: ESTree.VariableDeclaration, scope: Scope) => {
         const kind = node.kind
         for (const declartor of node.declarations) {
-            const { name } = <ESTree.Identifier>declartor.id
             const value = declartor.init ? evaluate(declartor.init, scope) : undefined
-            if (!scope.$declar(kind, name, value)) {
-                throw `[Error] ${name} 重复定义`
+            if (declartor.id.type === 'Identifier') {
+                const { name } = declartor.id
+                if (!scope.$declar(kind, name, value)) {
+                    throw `[Error] ${name} 重复定义`
+                }
+            } else {
+                evaluate(declartor.id, scope, value)
             }
         }
     },
@@ -253,8 +258,15 @@ const evaluate_map: EvaluateMap = {
             const new_scope = new Scope('function', scope)
             new_scope.invasived = true
             for (let i = 0; i < node.params.length; i++) {
-                const { name } = <ESTree.Identifier>node.params[i]
-                new_scope.$const(name, args[i])
+                const param = node.params[i]
+                if (param.type === 'Identifier') {
+                    const name = param.name
+                    new_scope.$const(name, args[i])
+                } else if (param.type === 'RestElement') {
+                    const rest = Array.prototype.slice.call(arguments).slice(i)
+                    evaluate(param, new_scope, rest)
+                    break
+                }
             }
             new_scope.$const('this', this)
             new_scope.$const('arguments', arguments)
@@ -549,17 +561,66 @@ const evaluate_map: EvaluateMap = {
         return constructor.bind(thisVar)
     },
 
+    RestElement: (node: ESTree.RestElement, scope: Scope, rest: Array<any>) => {
+        switch (node.argument.type) {
+            case 'Identifier':
+                const name = node.argument.name
+                scope.$const(name, rest)
+            default:
+                evaluate(node.argument, scope, rest)
+        }
+        
+    },
+
+    ArrayPattern: (node: ESTree.ArrayPattern, scope: Scope, sourceVar: any) => {
+        if (!isIterable(sourceVar)) {
+            throw 'ArrayPattern args are not iterable'
+        }
+        for (let i = 0; i < node.elements.length; i++) {
+            const element = node.elements[i]
+            if (element === null) {
+                continue
+            } else if (element.type === 'Identifier') {
+                const name = element.name
+                scope.$const(name, sourceVar[i])
+            } else if (element.type === 'RestElement') {
+                evaluate(element, scope, sourceVar.slice(i))
+            } else {
+                evaluate(element, scope, sourceVar[i])
+            }
+        }
+    },
+
+    ObjectPattern: (node: ESTree.ObjectPattern, scope: Scope, sourceVar: any) => {
+        for (let property of node.properties) {
+            const key = property.key.type === 'Identifier' ? property.key.name : evaluate(property.key, scope)
+            if (property.value.type === 'Identifier') {
+                const name = property.value.name
+                scope.$const(name, sourceVar[key])
+            } else {
+                evaluate(property.value, scope, sourceVar[key])
+            }
+        }
+    },
+
+    AssignmentPattern: (node: ESTree.AssignmentPattern, scope: Scope, evaluateVal: any) => {
+        const defaultVal = evaluate(node.right, scope)
+        const value = evaluateVal === undefined ? defaultVal : evaluateVal
+        if (node.left.type === 'Identifier') {
+            const name = node.left.name
+            scope.$const(name, value)
+        } else {
+            evaluate(node.left, scope, value)
+        }
+    },
+
     // 下面是 es6 / es7 特性, 先不做处理
-    RestElement: (node: ESTree.RestElement, scope: Scope) => { throw `${node.type} 未实现` },
     MetaProperty: (node: ESTree.MetaProperty, scope: Scope) => { throw `${node.type} 未实现` },
     AwaitExpression: (node: ESTree.AwaitExpression, scope: Scope) => { throw `${node.type} 未实现` },
     SpreadElement: (node: ESTree.SpreadElement, scope: Scope) => { throw `${node.type} 未实现` },
     TemplateElement: (node: ESTree.TemplateElement, scope: Scope) => { throw `${node.type} 未实现` },
     TaggedTemplateExpression: (node: ESTree.TaggedTemplateExpression, scope: Scope) => { throw `${node.type} 未实现` },
     MethodDefinition: (node: ESTree.MethodDefinition, scope: Scope) => { throw `${node.type} 未实现` },
-    AssignmentPattern: (node: ESTree.AssignmentPattern, scope: Scope) => { throw `${node.type} 未实现` },
-    ObjectPattern: (node: ESTree.ObjectPattern, scope: Scope) => { throw `${node.type} 未实现` },
-    ArrayPattern: (node: ESTree.ArrayPattern, scope: Scope) => { throw `${node.type} 未实现` },
     ForOfStatement: (node: ESTree.ForOfStatement, scope: Scope) => { throw `${node.type} 未实现` },
     TemplateLiteral: (node: ESTree.TemplateLiteral, scope: Scope) => { throw `${node.type} 未实现` },
     ImportDeclaration: (node: ESTree.ImportDeclaration, scope: Scope) => { throw `${node.type} 未实现` },
@@ -577,6 +638,9 @@ const evaluate_map: EvaluateMap = {
 const evaluate = (node: ESTree.Node, scope: Scope, arg?: any) => {
     const _evalute = (<EvaluateFunc>(evaluate_map[node.type]))
     return _evalute(node, scope, arg)
+}
+
+function dealVarInPattern(name: string, value: any, scope: Scope) {
 }
 
 export default evaluate

@@ -7,7 +7,7 @@ import { Var } from './scope'
 import evaluate from './eval'
 
 const options = {
-    ecmaVersion: 6,
+    ecmaVersion: 2018,
     sourceType: 'script',
     locations: true,
 }
